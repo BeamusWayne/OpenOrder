@@ -13,11 +13,84 @@ const OUT_OF_SCOPE =
   /transformer|注意力机制|量子|相对论|写一篇|写代码|python|golang|高考|微积分|政治|原理|什么是大模型|解释一下(?!.*糖|.*冰|.*杯)/i;
 const ORDERING =
   /点|下单|奶茶|咖啡|瑞幸|蜜雪|喜茶|奈雪|茶百道|生椰|拿铁|柠檬水|珍珠|葡萄|少糖|去冰|半糖|一杯|两杯|外卖|自取/;
-const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|中杯|好的|下单吧|买/;
+const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|少冰|正常冰|标准糖|全糖|中杯|大杯|规格|改成|好的|下单吧|买/;
 
 function lastUserText(request: ChatCompletionRequest): string {
   const users = request.messages.filter((message) => message.role === "user");
   return users.at(-1)?.content ?? "";
+}
+
+function allUserText(request: ChatCompletionRequest): string {
+  return request.messages
+    .filter((message) => message.role === "user" && message.content)
+    .map((message) => message.content)
+    .join("\n");
+}
+
+function extractUuid(text: string, key: string): string | undefined {
+  const match = text.match(new RegExp(`${key}[=:：]\\s*([0-9a-f-]{36})`, "i"));
+  return match?.[1];
+}
+
+function extractStoreId(request: ChatCompletionRequest): string | undefined {
+  for (const message of [...request.messages].reverse()) {
+    const content = typeof message.content === "string" ? message.content : "";
+    const keyed = extractUuid(content, "storeId");
+    if (keyed) {
+      return keyed;
+    }
+  }
+  for (const message of [...request.messages].reverse()) {
+    if (message.role !== "user" || typeof message.content !== "string") {
+      continue;
+    }
+    if (/新天地/.test(message.content)) {
+      return IDS.stores.luckinXintiandi;
+    }
+    if (/南京西路/.test(message.content)) {
+      return IDS.stores.luckinNanjing;
+    }
+  }
+  return undefined;
+}
+
+function pickSku(storeId: string, user: string): string {
+  if (storeId === IDS.stores.luckinXintiandi) {
+    return IDS.skus.coconutLatteXintiandi;
+  }
+  if (storeId === IDS.stores.mixuePeople || storeId === IDS.stores.mixueYangpu) {
+    return /柠檬/.test(user) ? IDS.skus.lemonWaterLarge : IDS.skus.iceCreamTeaMedium;
+  }
+  if (storeId === IDS.stores.chabaidaoJingan) {
+    return IDS.skus.brownSugarLarge;
+  }
+  if (storeId === IDS.stores.heyteaLujiazui) {
+    return IDS.skus.cheeseTeaMedium;
+  }
+  if (storeId === IDS.stores.nayukiXujiahui) {
+    return IDS.skus.grapeSnowMedium;
+  }
+  if (/美式/.test(user)) {
+    return IDS.skus.americanMedium;
+  }
+  return IDS.skus.coconutLatteMedium;
+}
+
+function pickModifiers(storeId: string, user: string): string[] {
+  if (storeId !== IDS.stores.luckinNanjing) {
+    return [];
+  }
+  const sugar = /半糖/.test(user)
+    ? IDS.modifiers.sugarHalf
+    : /标准糖|全糖/.test(user)
+      ? IDS.modifiers.sugarFull
+      : IDS.modifiers.sugarLess;
+  const ice = /少冰/.test(user)
+    ? IDS.modifiers.iceLess
+    : /正常冰/.test(user)
+      ? IDS.modifiers.iceNormal
+      : IDS.modifiers.iceNone;
+  return [sugar, ice];
 }
 
 function toolNames(request: ChatCompletionRequest): string[] {
@@ -90,14 +163,16 @@ function completion(params: {
 function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionResponse {
   const names = toolNames(request);
   const user = lastUserText(request);
+  const spoken = allUserText(request);
+  const storeId = extractStoreId(request) ?? IDS.stores.luckinNanjing;
   if (!names.includes("search_stores")) {
     return completion({
       model: request.model,
       toolName: "search_stores",
       toolArguments: {
         query: user || "瑞幸",
-        brand: /蜜雪/.test(user) ? "蜜雪冰城" : /喜茶/.test(user) ? "喜茶" : /奈雪/.test(user) ? "奈雪的茶" : /茶百道/.test(user) ? "茶百道" : "瑞幸咖啡",
-        item: /柠檬/.test(user) ? "柠檬水" : /美式/.test(user) ? "美式咖啡" : "生椰拿铁",
+        brand: /蜜雪/.test(spoken) ? "蜜雪冰城" : /喜茶/.test(spoken) ? "喜茶" : /奈雪/.test(spoken) ? "奈雪的茶" : /茶百道/.test(spoken) ? "茶百道" : "瑞幸咖啡",
+        item: /柠檬/.test(spoken) ? "柠檬水" : /美式/.test(spoken) ? "美式咖啡" : "生椰拿铁",
       },
     });
   }
@@ -106,8 +181,8 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       model: request.model,
       toolName: "get_menu",
       toolArguments: {
-        storeId: IDS.stores.luckinNanjing,
-        itemQuery: /柠檬/.test(user) ? "柠檬水" : "生椰拿铁",
+        storeId,
+        itemQuery: /柠檬/.test(spoken) ? "柠檬水" : /美式/.test(spoken) ? "美式咖啡" : "生椰拿铁",
       },
     });
   }
@@ -116,10 +191,10 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       model: request.model,
       toolName: "add_cart_item",
       toolArguments: {
-        storeId: IDS.stores.luckinNanjing,
-        skuId: IDS.skus.coconutLatteMedium,
+        storeId,
+        skuId: pickSku(storeId, spoken),
         quantity: 1,
-        modifierIds: [IDS.modifiers.sugarLess, IDS.modifiers.iceNone],
+        modifierIds: pickModifiers(storeId, spoken),
       },
     });
   }
@@ -161,8 +236,12 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
 
 function extractCartId(request: ChatCompletionRequest): string {
   for (const message of [...request.messages].reverse()) {
-    if (message.role !== "tool" || !message.content) {
+    if (!message.content) {
       continue;
+    }
+    const keyed = extractUuid(message.content, "cartId");
+    if (keyed) {
+      return keyed;
     }
     const match = message.content.match(/"cartId"\s*:\s*"([0-9a-f-]{36})"/i);
     if (match?.[1]) {

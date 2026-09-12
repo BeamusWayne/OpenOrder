@@ -17,6 +17,21 @@ describe("OpenAI-compatible mock", () => {
     expect(response.object).toBe("chat.completion");
   });
 
+  it("uses storeId from a follow-up store pick", () => {
+    const response = completeChat({
+      model: "openorder-mock",
+      messages: [
+        { role: "user", content: "帮我点杯瑞幸生椰拿铁少糖" },
+        { role: "tool", name: "search_stores", content: "[]" },
+        { role: "user", content: "就这家：瑞幸咖啡 新天地店 storeId=22222222-2222-4222-8222-222222222202" },
+      ],
+    });
+    expect(response.choices[0]?.message.tool_calls?.[0]?.function.name).toBe("get_menu");
+    expect(response.choices[0]?.message.tool_calls?.[0]?.function.arguments).toContain(
+      "22222222-2222-4222-8222-222222222202",
+    );
+  });
+
   it("emits search_stores tool_calls for a Luckin order", () => {
     const response = completeChat({
       model: "openorder-mock",

@@ -21,7 +21,12 @@ describe("agent host", () => {
     }
     expect(executeTool).not.toHaveBeenCalled();
     expect(events.some((event) => event.type === "intent" && event.intent === "out_of_scope")).toBe(true);
-    expect(events.some((event) => event.type === "ui" && event.block.type === "intercept")).toBe(true);
+    const intercept = events.find((event) => event.type === "ui" && event.block.type === "intercept");
+    expect(intercept).toBeDefined();
+    expect(intercept && intercept.type === "ui" ? intercept.block.message : "").toBe(
+      "我只能帮你点饮品、改规格、确认下单或查询已有订单。",
+    );
+    expect(JSON.stringify(events)).not.toMatch(/Transformer|算法|原理这类/);
   });
 
   it("starts the ordering tool loop for a Luckin request", async () => {
@@ -47,8 +52,9 @@ describe("agent host", () => {
     })) {
       events.push(event);
     }
-    expect(executeTool).toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
     expect(executeTool.mock.calls[0]?.[0]).toBe("search_stores");
     expect(events.some((event) => event.type === "ui" && event.block.type === "store_list")).toBe(true);
+    expect(events.some((event) => event.type === "token" && event.text?.includes("选择一家门店"))).toBe(true);
   });
 });

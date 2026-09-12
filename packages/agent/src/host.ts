@@ -13,8 +13,7 @@ const CLASSIFY_SYSTEM =
 const ORDER_SYSTEM =
   "You are OpenOrder, a beverage ordering assistant. Use tools to search stores, configure drinks, confirm, checkout, and pay. Never answer unrelated academic or technical questions.";
 
-const INTERCEPT_MESSAGE =
-  "我只能帮你点饮品、改规格、确认下单或查询已有订单。像 Transformer 原理这类问题不在服务范围里。";
+const INTERCEPT_MESSAGE = "我只能帮你点饮品、改规格、确认下单或查询已有订单。";
 
 export type AgentHostOptions = {
   llm: LlmClient;
@@ -98,7 +97,40 @@ export async function* runTurn(
       }
       yield { type: "tool_end", name: call.function.name, result };
       if (call.function.name === "search_stores" && Array.isArray(result)) {
+        yield { type: "token", text: "请选择一家门店继续下单。" };
         yield { type: "ui", block: { type: "store_list", stores: result } };
+        return;
+      }
+      if (call.function.name === "get_menu" && result && typeof result === "object") {
+        const menu = result as {
+          storeId?: string;
+          items?: Array<{
+            id: string;
+            name: string;
+            skus?: Array<{ id: string; name: string; size?: string; basePriceCents?: number; quantity?: number }>;
+            groups?: Array<{
+              id: string;
+              name: string;
+              required: boolean;
+              options: Array<{ id: string; name: string; priceDeltaCents: number }>;
+            }>;
+          }>;
+        };
+        const item = menu.items?.[0];
+        if (item?.id && ((item.groups?.length ?? 0) > 0 || (item.skus?.length ?? 0) > 0)) {
+          yield {
+            type: "ui",
+            block: {
+              type: "modifier_picker",
+              storeId: menu.storeId,
+              itemId: item.id,
+              itemName: item.name,
+              skuId: item.skus?.[0]?.id ?? item.id,
+              skus: item.skus ?? [],
+              groups: item.groups ?? [],
+            },
+          };
+        }
       }
       if (call.function.name === "prepare_checkout" && result && typeof result === "object") {
         yield { type: "ui", block: result as never };

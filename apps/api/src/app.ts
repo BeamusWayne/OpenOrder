@@ -172,21 +172,30 @@ authed.post("/v1/threads/:id/messages", async (context) => {
 authed.post("/v1/threads/:id/confirm", async (context) => {
   const customerId = context.get("customerId");
   const threadId = context.req.param("id");
-  await context.req.json<{ cartId: string }>().catch(() => ({ cartId: "" }));
+  const thread = await db.query.threads.findFirst({ where: eq(threads.id, threadId) });
+  if (!thread || thread.customerId !== customerId) {
+    return context.json({ error: "not_found" }, 404);
+  }
+  const body = await context.req.json<{ cartId?: string }>().catch(() => ({ cartId: "" }));
+  const cartId = typeof body.cartId === "string" ? body.cartId.trim() : "";
+  const text = cartId ? `确认下单并支付 cartId=${cartId}` : "确认下单并支付";
+  await db.insert(messages).values({ threadId, role: "user", content: text });
   const historyRows = await db.select().from(messages).where(eq(messages.threadId, threadId));
-  const history = historyRows.map((row) => ({
-    role: row.role as ChatMessage["role"],
-    content: row.content,
-    name: row.name ?? undefined,
-    tool_call_id: row.toolCallId ?? undefined,
-  }));
+  const history = historyRows
+    .slice(0, -1)
+    .map((row) => ({
+      role: row.role as ChatMessage["role"],
+      content: row.content,
+      name: row.name ?? undefined,
+      tool_call_id: row.toolCallId ?? undefined,
+    }));
   const executeTool = createToolRouter(ordering, {
     customerId,
     threadId,
     confirmed: true,
   });
   return streamSSE(context, async (stream) => {
-    for await (const event of runTurn("确认下单并支付", { llm, executeTool, history })) {
+    for await (const event of runTurn(text, { llm, executeTool, history })) {
       await persistEvent(threadId, event);
       await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
     }
