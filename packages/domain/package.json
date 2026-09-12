@@ -1,0 +1,23 @@
+{
+  "name": "@openorder/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openorder/db": "workspace:*",
+    "@openorder/protocol": "workspace:*",
+    "@openorder/simulator": "workspace:*",
+    "drizzle-orm": "^0.40.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}

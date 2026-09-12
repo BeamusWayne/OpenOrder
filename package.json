@@ -5,6 +5,9 @@
   "engines": {
     "node": ">=22"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
