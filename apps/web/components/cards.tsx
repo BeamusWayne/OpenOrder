@@ -368,6 +368,7 @@ export function ClarifyCard({
             className="choice"
             key={option.id}
             disabled={busy}
+            data-testid={`clarify-${option.id}`}
             onClick={() => onPick(option.text)}
           >
             {option.label}

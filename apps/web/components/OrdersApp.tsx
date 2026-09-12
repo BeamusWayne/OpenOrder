@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { listOrders, type OrderRecord } from "../lib/api";
 import { STATUS_LABEL, yuan } from "../lib/format";
@@ -19,7 +18,6 @@ function reorderText(order: OrderRecord) {
 }
 
 export function OrdersApp() {
-  const router = useRouter();
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingSession, setMissingSession] = useState(false);
@@ -41,7 +39,7 @@ export function OrdersApp() {
     sessionStorage.setItem("openorder.reorder", reorderText(order));
     sessionStorage.removeItem("openorder.threadId");
     sessionStorage.removeItem("openorder.messages");
-    router.push("/");
+    window.location.assign("/");
   }
 
   return (

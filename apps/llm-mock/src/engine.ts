@@ -73,6 +73,9 @@ function pickSku(storeId: string, user: string): string {
   if (/美式/.test(user)) {
     return IDS.skus.americanMedium;
   }
+  if (/超大/.test(user)) {
+    return IDS.skus.soldOutLatte;
+  }
   return IDS.skus.coconutLatteMedium;
 }
 
