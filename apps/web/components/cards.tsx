@@ -12,7 +12,36 @@ export type Store = {
   distanceMeters: number;
   rating?: number;
   etaMinutes: number;
+  openHour?: number;
+  closeHour?: number;
+  supportsPickup?: boolean;
+  supportsDelivery?: boolean;
 };
+
+export type SoldOutAlternative = {
+  kind: "sku" | "store" | "item";
+  label: string;
+  storeId?: string;
+  storeName?: string;
+  skuId?: string;
+  skuName?: string;
+  itemName?: string;
+};
+
+function hourLabel(value?: number) {
+  if (value == null) {
+    return "";
+  }
+  return `${String(value).padStart(2, "0")}:00`;
+}
+
+function storeOpen(store: Store) {
+  if (store.openHour == null || store.closeHour == null) {
+    return true;
+  }
+  const hour = new Date().getHours();
+  return hour >= store.openHour && hour < store.closeHour;
+}
 
 type ConfirmLine = {
   name: string;
@@ -75,6 +104,13 @@ export function StoreListCard({
                 <div className="store-meta">
                   {store.brand} · {store.distanceMeters}m
                   {store.rating ? ` · ${store.rating}` : ""}
+                </div>
+                <div className="store-meta">
+                  {hourLabel(store.openHour)}
+                  {store.closeHour != null ? `–${hourLabel(store.closeHour)}` : ""}
+                  {store.openHour != null ? ` · ${storeOpen(store) ? "营业中" : "已打烊"}` : ""}
+                  {store.supportsPickup !== false ? " · 自取" : ""}
+                  {store.supportsDelivery ? " · 可配送" : ""}
                 </div>
               </div>
               <span className="store-eta">{store.etaMinutes} 分钟</span>
@@ -192,42 +228,54 @@ export function ConfirmCard({
   block,
   busy,
   spec,
+  onSpecChange,
   onConfirm,
 }: {
   block: Record<string, unknown>;
   busy: boolean;
   spec: DrinkSpec | null;
+  onSpecChange?: (spec: DrinkSpec) => void;
   onConfirm: (cartId: string) => void;
 }) {
   const cartId = String(block.cartId ?? "");
   const lines = (block.lines as ConfirmLine[]) ?? [];
+  const quantity = spec?.quantity ?? lines[0]?.quantity ?? 1;
   const displayLines = spec
     ? [
         {
           name: spec.skuName,
-          quantity: spec.quantity,
+          quantity,
           unitPriceCents: specUnitPrice(spec),
           modifiers: spec.modifiers.map((item) => item.name),
         },
       ]
-    : lines;
+    : lines.map((line) => ({ ...line, quantity }));
   const totalCents = displayLines.reduce(
     (sum, line) => sum + line.unitPriceCents * line.quantity,
     0,
   );
+  const eta = Number(block.etaMinutes ?? 15);
+  const fulfillment = block.fulfillment === "delivery" ? "配送" : "自取";
+
+  function changeQty(next: number) {
+    if (!spec || !onSpecChange) {
+      return;
+    }
+    onSpecChange({ ...spec, quantity: Math.max(1, Math.min(9, next)) });
+  }
 
   return (
     <div className="card" data-testid="order-confirm">
       <p className="card-kicker">确认后进入模拟支付，现在还不会扣款</p>
       <h3>确认订单</h3>
-      <p className="muted">{String(block.storeName ?? "")}</p>
+      <p className="muted">
+        {String(block.storeName ?? "")} · {fulfillment} · 预计 {eta} 分钟
+      </p>
       <div className="line-list">
         {displayLines.map((line, index) => (
           <div className="line-row" key={`${line.name}-${index}`}>
             <div>
-              <strong>
-                {line.name} × {line.quantity}
-              </strong>
+              <strong>{line.name}</strong>
               {line.modifiers?.length ? (
                 <div className="line-meta">{line.modifiers.join(" · ")}</div>
               ) : null}
@@ -235,6 +283,18 @@ export function ConfirmCard({
             <span className="line-price">{yuan(line.unitPriceCents * line.quantity)}</span>
           </div>
         ))}
+      </div>
+      <div className="qty-row">
+        <span>杯数</span>
+        <div className="qty-controls">
+          <button type="button" className="qty-btn" disabled={busy || quantity <= 1} onClick={() => changeQty(quantity - 1)}>
+            −
+          </button>
+          <span data-testid="confirm-qty">{quantity}</span>
+          <button type="button" className="qty-btn" data-testid="qty-plus" disabled={busy || quantity >= 9} onClick={() => changeQty(quantity + 1)}>
+            +
+          </button>
+        </div>
       </div>
       <p className="total">
         <span>合计</span>
@@ -249,6 +309,71 @@ export function ConfirmCard({
       >
         {busy ? "提交中…" : "确认下单"}
       </button>
+    </div>
+  );
+}
+
+export function SoldOutCard({
+  block,
+  busy,
+  onPick,
+}: {
+  block: Record<string, unknown>;
+  busy: boolean;
+  onPick: (alternative: SoldOutAlternative) => void;
+}) {
+  const alternatives = (block.alternatives as SoldOutAlternative[]) ?? [];
+  return (
+    <div className="card" data-testid="sold-out">
+      <p className="card-kicker">售罄</p>
+      <h3>{String(block.itemName ?? "这杯")}</h3>
+      <p className="muted">{String(block.message ?? "这杯暂时售罄。")}</p>
+      <div className="pay-methods">
+        {alternatives.map((item, index) => (
+          <button
+            type="button"
+            className="pay-method"
+            data-testid={`alt-${item.kind}`}
+            key={`${item.kind}-${index}`}
+            disabled={busy}
+            onClick={() => onPick(item)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function ClarifyCard({
+  block,
+  busy,
+  onPick,
+}: {
+  block: Record<string, unknown>;
+  busy: boolean;
+  onPick: (text: string) => void;
+}) {
+  const options =
+    (block.options as Array<{ id: string; label: string; text: string }>) ?? [];
+  return (
+    <div className="card" data-testid="clarify">
+      <p className="card-kicker">还差一点信息</p>
+      <h3>{String(block.prompt ?? "先确认这几项")}</h3>
+      <div className="choice-row">
+        {options.map((option) => (
+          <button
+            type="button"
+            className="choice"
+            key={option.id}
+            disabled={busy}
+            onClick={() => onPick(option.text)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

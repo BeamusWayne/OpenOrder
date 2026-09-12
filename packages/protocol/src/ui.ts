@@ -7,6 +7,7 @@ export const ConfirmLineSchema = z.object({
   quantity: z.number().int().positive(),
   unitPriceCents: MoneyCents,
   modifiers: z.array(z.string()),
+  skuId: z.string().uuid().optional(),
 });
 
 export const StoreCardSchema = z.object({
@@ -19,6 +20,10 @@ export const StoreCardSchema = z.object({
       distanceMeters: z.number().nonnegative(),
       rating: z.number(),
       etaMinutes: z.number().int(),
+      openHour: z.number().int().optional(),
+      closeHour: z.number().int().optional(),
+      supportsPickup: z.boolean().optional(),
+      supportsDelivery: z.boolean().optional(),
     }),
   ),
 });
@@ -63,6 +68,8 @@ export const OrderConfirmSchema = z.object({
   storeName: z.string(),
   lines: z.array(ConfirmLineSchema),
   totalCents: MoneyCents.nonnegative(),
+  etaMinutes: z.number().int().optional(),
+  fulfillment: z.enum(["pickup", "delivery"]).optional(),
 });
 
 export const PaymentBlockSchema = z.object({
@@ -78,6 +85,7 @@ export const PaymentSheetSchema = z.object({
   amountCents: MoneyCents.nonnegative(),
   storeName: z.string(),
   merchantName: z.string(),
+  pickupCode: z.string().optional(),
   lines: z.array(ConfirmLineSchema).optional().default([]),
 });
 
@@ -117,6 +125,36 @@ export const OrderProgressSchema = z.object({
   storeName: z.string(),
   status: z.string(),
   steps: z.array(ProgressStepSchema),
+  pickupCode: z.string().optional(),
+});
+
+export const SoldOutSchema = z.object({
+  type: z.literal("sold_out"),
+  itemName: z.string(),
+  message: z.string(),
+  alternatives: z.array(
+    z.object({
+      kind: z.enum(["sku", "store", "item"]),
+      label: z.string(),
+      storeId: z.string().uuid().optional(),
+      storeName: z.string().optional(),
+      skuId: z.string().uuid().optional(),
+      skuName: z.string().optional(),
+      itemName: z.string().optional(),
+    }),
+  ),
+});
+
+export const ClarifySchema = z.object({
+  type: z.literal("clarify"),
+  prompt: z.string(),
+  options: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      text: z.string(),
+    }),
+  ),
 });
 
 export const OrderStatusBlockSchema = z.object({
@@ -143,6 +181,8 @@ export const UiBlockSchema = z.discriminatedUnion("type", [
   OrderProgressSchema,
   OrderStatusBlockSchema,
   InterceptBlockSchema,
+  SoldOutSchema,
+  ClarifySchema,
 ]);
 export type UiBlock = z.infer<typeof UiBlockSchema>;
 

@@ -34,6 +34,7 @@ type OrderSnapshot = {
   status: string;
   storeName: string;
   merchantName?: string;
+  pickupCode?: string;
   totalCents: number;
   lines?: Array<{
     name: string;
@@ -54,6 +55,16 @@ async function* emitTyped(text: string): AsyncGenerator<AgentEvent> {
       await sleep(STREAM_DELAY_MS);
     }
   }
+}
+
+function needsClarify(text: string, history: ChatMessage[]) {
+  if (history.some((row) => row.role === "user")) {
+    return false;
+  }
+  if (/瑞幸|蜜雪|喜茶|奈雪|茶百道|生椰|拿铁|柠檬|珍珠|葡萄|美式|褐糖/.test(text)) {
+    return false;
+  }
+  return /点|喝|奶茶|咖啡|茶/.test(text);
 }
 
 function introFor(text: string): string | null {
@@ -83,6 +94,7 @@ function paymentSheet(order: OrderSnapshot) {
     amountCents: order.totalCents,
     storeName: order.storeName,
     merchantName: merchantNameOf(order),
+    pickupCode: order.pickupCode,
     lines: order.lines ?? [],
   };
 }
@@ -176,6 +188,24 @@ export async function* runTurn(
     return;
   }
 
+  if (needsClarify(text, history)) {
+    yield {
+      type: "ui",
+      block: {
+        type: "clarify",
+        prompt: "先确认几杯、糖度、冰量和取餐方式。",
+        options: [
+          { id: "one-less", label: "一杯少糖去冰", text: "一杯少糖去冰，自取，生椰拿铁" },
+          { id: "one-half", label: "一杯半糖少冰", text: "一杯半糖少冰，自取，生椰拿铁" },
+          { id: "two-pickup", label: "两杯自取", text: "两杯少糖去冰，自取，生椰拿铁" },
+          { id: "delivery", label: "外送", text: "一杯少糖去冰，外送，生椰拿铁" },
+        ],
+      },
+    };
+    yield* emitTyped("信息还不全。先选几杯、糖、冰，以及自取还是外送。");
+    return;
+  }
+
   const intro = introFor(text);
   if (intro) {
     yield* emitTyped(intro);
@@ -219,6 +249,33 @@ export async function* runTurn(
       try {
         result = await options.executeTool(call.function.name, args);
       } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+        if (code === "sold_out") {
+          const rawArgs = (args ?? {}) as { storeId?: string; skuId?: string };
+          const suggested = (await options.executeTool("suggest_alternatives", rawArgs)) as {
+            itemName?: string;
+            alternatives?: Array<{
+              kind: "sku" | "store" | "item";
+              label: string;
+              storeId?: string;
+              storeName?: string;
+              skuId?: string;
+              skuName?: string;
+              itemName?: string;
+            }>;
+          };
+          yield {
+            type: "ui",
+            block: {
+              type: "sold_out",
+              itemName: suggested.itemName ?? "这杯",
+              message: "这杯暂时售罄，可以换杯型、换店或换相似款。",
+              alternatives: suggested.alternatives ?? [],
+            },
+          };
+          yield* emitTyped("这杯暂时售罄，可以换杯型、换店或换相似款。");
+          return;
+        }
         yield {
           type: "error",
           message: error instanceof Error ? error.message : "tool failed",
@@ -255,7 +312,7 @@ export async function* runTurn(
           }>;
         };
         const item = menu.items?.[0];
-        if (item?.id && ((item.groups?.length ?? 0) > 0 || (item.skus?.length ?? 0) > 0)) {
+        if (menu.storeId && item?.id && ((item.groups?.length ?? 0) > 0 || (item.skus?.length ?? 0) > 0)) {
           yield {
             type: "ui",
             block: {
@@ -307,6 +364,7 @@ export async function* runTurn(
             storeName: order.storeName,
             status: order.status,
             steps: progressSteps(order.status),
+            pickupCode: order.pickupCode,
           },
         };
         yield* emitTyped("支付已完成。出餐进度会在卡片里更新。");
@@ -327,6 +385,7 @@ export async function* runTurn(
               storeName: order.storeName,
               status: order.status,
               steps: progressSteps(order.status),
+              pickupCode: order.pickupCode,
             },
           };
           yield* emitTyped(`当前订单在「${order.storeName}」，状态已同步到进度卡。`);

@@ -25,8 +25,20 @@ export type OrderRecord = {
   totalCents: number;
   paymentStatus?: string;
   paymentProvider?: string;
+  pickupCode?: string;
+  fulfillment?: string;
   lines?: OrderLine[];
 };
+
+export async function getOrder(token: string, orderId: string) {
+  const response = await fetch(`${API}/v1/orders/${orderId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new Error("get order failed");
+  }
+  return response.json() as Promise<OrderRecord>;
+}
 
 export async function guestLogin() {
   const response = await fetch(`${API}/v1/auth/guest`, { method: "POST" });

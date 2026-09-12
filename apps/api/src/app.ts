@@ -48,7 +48,7 @@ app.post("/v1/auth/guest", async (context) => {
   return context.json({ token, customer });
 });
 
-const authed = new Hono();
+const authed = new Hono<{ Variables: { customerId: string } }>();
 authed.use("*", requireAuth);
 
 authed.post("/v1/carts", async (context) => {

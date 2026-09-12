@@ -13,7 +13,7 @@ const OUT_OF_SCOPE =
   /transformer|注意力机制|量子|相对论|写一篇|写代码|python|golang|高考|微积分|政治|原理|什么是大模型|解释一下(?!.*糖|.*冰|.*杯)/i;
 const ORDERING =
   /点|下单|奶茶|咖啡|瑞幸|蜜雪|喜茶|奈雪|茶百道|生椰|拿铁|柠檬水|珍珠|葡萄|少糖|去冰|半糖|一杯|两杯|外卖|自取/;
-const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|少冰|正常冰|标准糖|全糖|中杯|大杯|规格|改成|好的|下单吧|买|查看订单|订单状态|我的订单/;
+const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|少冰|正常冰|标准糖|全糖|中杯|大杯|规格|改成|好的|下单吧|买|查看订单|订单状态|我的订单|换成|换店|换一家|再加一杯|再来一杯/;
 
 function lastUserText(request: ChatCompletionRequest): string {
   const users = request.messages.filter((message) => message.role === "user");
@@ -180,6 +180,36 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       toolArguments: { orderId: extractOrderId(request) },
     });
   }
+  if (/换店|换一家/.test(user) && !/就这家/.test(user)) {
+    return completion({
+      model: request.model,
+      toolName: "search_stores",
+      toolArguments: {
+        query: user || "瑞幸",
+        brand: /蜜雪/.test(spoken) ? "蜜雪冰城" : "瑞幸咖啡",
+        item: /柠檬/.test(spoken) ? "柠檬水" : "生椰拿铁",
+      },
+    });
+  }
+  if (/换成|换杯|换相似|再加一杯|再来一杯/.test(user)) {
+    if (names.at(-1) !== "add_cart_item") {
+      return completion({
+        model: request.model,
+        toolName: "add_cart_item",
+        toolArguments: {
+          storeId,
+          skuId: extractSkuId(request) ?? pickSku(storeId, spoken),
+          quantity: 1,
+          modifierIds: pickModifiers(storeId, spoken),
+        },
+      });
+    }
+    return completion({
+      model: request.model,
+      toolName: "prepare_checkout",
+      toolArguments: { cartId: extractCartId(request) },
+    });
+  }
   if (!names.includes("search_stores")) {
     return completion({
       model: request.model,
@@ -207,7 +237,7 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       toolName: "add_cart_item",
       toolArguments: {
         storeId,
-        skuId: pickSku(storeId, spoken),
+        skuId: extractSkuId(request) ?? pickSku(storeId, spoken),
         quantity: 1,
         modifierIds: pickModifiers(storeId, spoken),
       },
@@ -240,6 +270,17 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
     model: request.model,
     content: "请确认订单卡片后，我再帮你提交。",
   });
+}
+
+function extractSkuId(request: ChatCompletionRequest): string | undefined {
+  for (const message of [...request.messages].reverse()) {
+    const content = typeof message.content === "string" ? message.content : "";
+    const keyed = extractUuid(content, "skuId");
+    if (keyed) {
+      return keyed;
+    }
+  }
+  return undefined;
 }
 
 function extractCartId(request: ChatCompletionRequest): string {

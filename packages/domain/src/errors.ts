@@ -16,8 +16,11 @@ export class NotFoundError extends DomainError {
 }
 
 export class SoldOutError extends DomainError {
+  readonly skuName: string;
+
   constructor(skuName: string) {
     super("sold_out", `${skuName} is sold out`, 409);
+    this.skuName = skuName;
   }
 }
 

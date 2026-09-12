@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { advanceOrder, payOrder } from "../lib/api";
+import { advanceOrder, getOrder, payOrder } from "../lib/api";
 import { yuan } from "../lib/format";
 
 type PayLine = {
@@ -80,16 +80,30 @@ export function Timeline({
   );
 }
 
+export function PickupCode({ code }: { code?: string }) {
+  if (!code) {
+    return null;
+  }
+  return (
+    <div className="pickup-code" data-testid="pickup-code">
+      <span className="card-kicker">取餐码</span>
+      <strong>{code}</strong>
+    </div>
+  );
+}
+
 export function ProgressCard({
   storeName,
   orderId,
   status,
   steps,
+  pickupCode,
 }: {
   storeName: string;
   orderId: string;
   status: string;
   steps?: Array<{ key: string; label: string; state: string }>;
+  pickupCode?: string;
 }) {
   return (
     <div className="card" data-testid="order-progress-card">
@@ -97,6 +111,9 @@ export function ProgressCard({
       <h3>{storeName || "订单"}</h3>
       <p className="muted">订单 {orderId.slice(0, 8)}</p>
       <Timeline status={status} steps={steps} />
+      {status === "ready" || status === "making" || status === "accepted" || status === "paid" ? (
+        <PickupCode code={pickupCode} />
+      ) : null}
     </div>
   );
 }
@@ -112,6 +129,8 @@ export function PaymentFlow({
   const amountCents = Number(block.amountCents ?? 0);
   const merchantName = String(block.merchantName ?? "瑞幸咖啡");
   const storeName = String(block.storeName ?? "");
+  const pickupCode = String(block.pickupCode ?? "").replace(/-/g, "").slice(-6).toUpperCase() ||
+    orderId.replace(/-/g, "").slice(-6).toUpperCase();
   const lines = (block.lines as PayLine[]) ?? [];
   const [overlay, setOverlay] = useState<Provider | null>(null);
   const [phase, setPhase] = useState<Phase>("choose");
@@ -124,6 +143,32 @@ export function PaymentFlow({
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!token || !orderId) {
+      return;
+    }
+    let cancelled = false;
+    getOrder(token, orderId)
+      .then((order) => {
+        if (cancelled || order.status === "draft_confirmed") {
+          return;
+        }
+        setPhase("progress");
+        if (
+          order.status === "paid" ||
+          order.status === "accepted" ||
+          order.status === "making" ||
+          order.status === "ready"
+        ) {
+          setProgress(order.status);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, orderId]);
 
   function openCashier(next: Provider) {
     if (phase !== "choose") {
@@ -242,7 +287,12 @@ export function PaymentFlow({
         </div>
       ) : null}
 
-      {phase === "progress" ? <Timeline status={progress} /> : null}
+      {phase === "progress" ? (
+        <>
+          <Timeline status={progress} />
+          <PickupCode code={pickupCode} />
+        </>
+      ) : null}
 
       {mounted && overlay
         ? createPortal(

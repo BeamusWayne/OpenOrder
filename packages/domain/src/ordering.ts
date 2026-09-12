@@ -23,6 +23,10 @@ import { haversineMeters } from "./geo.js";
 const DEFAULT_LAT = 31.2304;
 const DEFAULT_LNG = 121.4737;
 
+export function pickupCodeFrom(orderId: string) {
+  return orderId.replace(/-/g, "").slice(-6).toUpperCase();
+}
+
 export class Ordering {
   constructor(private readonly db: Database) {}
 
@@ -87,6 +91,10 @@ export class Ordering {
           distanceMeters,
           rating: Number(store.rating),
           etaMinutes: Math.max(15, Math.round(distanceMeters / 80)),
+          openHour: store.openHour,
+          closeHour: store.closeHour,
+          supportsPickup: store.supportsPickup,
+          supportsDelivery: store.supportsDelivery,
         };
       })
       .sort((a, b) => a.distanceMeters - b.distanceMeters)
@@ -245,6 +253,7 @@ export class Ordering {
         : [];
       detailed.push({
         id: line.id,
+        skuId: line.skuId,
         name: sku?.name ?? "unknown",
         quantity: line.quantity,
         unitPriceCents: line.unitPriceCents,
@@ -255,11 +264,16 @@ export class Ordering {
       (sum, line) => sum + line.unitPriceCents * line.quantity,
       0,
     );
+    const distanceMeters = store
+      ? Math.round(haversineMeters(DEFAULT_LAT, DEFAULT_LNG, Number(store.latitude), Number(store.longitude)))
+      : 0;
     return {
       cartId: cart.id,
       storeId: cart.storeId,
       storeName: store?.name ?? "",
       status: cart.status,
+      etaMinutes: Math.max(15, Math.round(distanceMeters / 80)),
+      fulfillment: "pickup" as const,
       lines: detailed,
       totalCents,
     };
@@ -332,11 +346,14 @@ export class Ordering {
       type: "order_confirm" as const,
       cartId: cart.cartId,
       storeName: cart.storeName,
+      etaMinutes: cart.etaMinutes,
+      fulfillment: cart.fulfillment,
       lines: cart.lines.map((line) => ({
         name: line.name,
         quantity: line.quantity,
         unitPriceCents: line.unitPriceCents,
         modifiers: line.modifiers,
+        skuId: line.skuId,
       })),
       totalCents: cart.totalCents,
     };
@@ -518,6 +535,92 @@ export class Ordering {
     });
   }
 
+  async suggestAlternatives(input: { storeId?: string; skuId?: string; itemQuery?: string }) {
+    const sku = input.skuId
+      ? await this.db.query.skus.findFirst({ where: eq(skus.id, input.skuId) })
+      : undefined;
+    const item = sku
+      ? await this.db.query.items.findFirst({ where: eq(items.id, sku.itemId) })
+      : undefined;
+    const alternatives: Array<{
+      kind: "sku" | "store" | "item";
+      label: string;
+      storeId?: string;
+      storeName?: string;
+      skuId?: string;
+      skuName?: string;
+      itemName?: string;
+    }> = [];
+
+    if (item) {
+      const siblings = await this.db.select().from(skus).where(eq(skus.itemId, item.id));
+      for (const sibling of siblings) {
+        if (sibling.id === sku?.id) {
+          continue;
+        }
+        const stock = await this.db.query.inventory.findFirst({
+          where: eq(inventory.skuId, sibling.id),
+        });
+        if (!stock || stock.quantity <= 0) {
+          continue;
+        }
+        alternatives.push({
+          kind: "sku",
+          label: `换杯型：${sibling.name}`,
+          storeId: input.storeId,
+          skuId: sibling.id,
+          skuName: sibling.name,
+          itemName: item.name,
+        });
+      }
+    }
+
+    const nearby = await this.searchStores({ query: item?.name ?? input.itemQuery ?? "饮品" });
+    for (const store of nearby) {
+      if (store.id === input.storeId) {
+        continue;
+      }
+      alternatives.push({
+        kind: "store",
+        label: `换店：${store.name}`,
+        storeId: store.id,
+        storeName: store.name,
+      });
+      if (alternatives.filter((row) => row.kind === "store").length >= 2) {
+        break;
+      }
+    }
+
+    if (input.storeId) {
+      const menu = await this.getMenu(input.storeId);
+      for (const other of menu.items) {
+        if (other.id === item?.id) {
+          continue;
+        }
+        const available = other.skus.find((row) => (row.quantity ?? 0) > 0);
+        if (!available) {
+          continue;
+        }
+        alternatives.push({
+          kind: "item",
+          label: `换相似款：${other.name}`,
+          storeId: input.storeId,
+          skuId: available.id,
+          skuName: available.name,
+          itemName: other.name,
+        });
+        if (alternatives.filter((row) => row.kind === "item").length >= 2) {
+          break;
+        }
+      }
+    }
+
+    return {
+      itemName: item?.name ?? input.itemQuery ?? "这杯",
+      alternatives,
+    };
+  }
+
   async getOrder(orderId: string, customerId: string) {
     const order = await this.db.query.orders.findFirst({
       where: and(eq(orders.id, orderId), eq(orders.customerId, customerId)),
@@ -569,6 +672,8 @@ export class Ordering {
       totalCents: order.totalCents,
       paymentStatus: payment?.status ?? "pending",
       paymentProvider: payment?.provider ?? "mock",
+      pickupCode: pickupCodeFrom(order.id),
+      fulfillment: order.fulfillment,
       lines: lines.map((line) => ({
         name: line.nameSnapshot,
         quantity: line.quantity,

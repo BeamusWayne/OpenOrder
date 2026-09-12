@@ -625,6 +625,44 @@ button {
   font-size: 13px;
 }
 
+.qty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 14px;
+}
+
+.qty-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.qty-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #faf7f2;
+  cursor: pointer;
+}
+
+.pickup-code {
+  margin: 12px 0 0;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.pickup-code strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 28px;
+  letter-spacing: 0.2em;
+  font-variant-numeric: tabular-nums;
+}
+
 .error-text {
   color: var(--danger);
 }

@@ -55,6 +55,10 @@ export function createToolRouter(ordering: Ordering, context: ToolContext) {
       }
       case "get_order":
         return ordering.getOrder(GetOrderInputSchema.parse(raw).orderId, context.customerId);
+      case "suggest_alternatives": {
+        const rawArgs = (raw ?? {}) as { storeId?: string; skuId?: string; itemQuery?: string };
+        return ordering.suggestAlternatives(rawArgs);
+      }
       default:
         throw new Error(`Unknown tool ${name}`);
     }

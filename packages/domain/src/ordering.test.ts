@@ -93,6 +93,16 @@ describe("Ordering", () => {
     expect(updated.lines[0]?.modifiers).toEqual(["半糖", "少冰"]);
   });
 
+  it("suggests size, store, and similar-item alternatives for a sold-out SKU", async () => {
+    const suggested = await ordering.suggestAlternatives({
+      storeId: IDS.stores.luckinNanjing,
+      skuId: IDS.skus.soldOutLatte,
+    });
+    expect(suggested.alternatives.some((item) => item.kind === "sku")).toBe(true);
+    expect(suggested.alternatives.some((item) => item.kind === "store")).toBe(true);
+    expect(suggested.alternatives.some((item) => item.kind === "item")).toBe(true);
+  });
+
   it("does not oversell a SKU with two cups under concurrent checkouts", async () => {
     await seedCatalog(db);
     const attempts = 20;

@@ -36,9 +36,11 @@ describe("agent host", () => {
     expect(events.some((event) => event.type === "intent" && event.intent === "out_of_scope")).toBe(true);
     const intercept = events.find((event) => event.type === "ui" && event.block.type === "intercept");
     expect(intercept).toBeDefined();
-    expect(intercept && intercept.type === "ui" ? intercept.block.message : "").toBe(
-      "我只能帮你点饮品、改规格、确认下单或查询已有订单。",
-    );
+    expect(
+      intercept && intercept.type === "ui" && intercept.block.type === "intercept"
+        ? intercept.block.message
+        : "",
+    ).toBe("我只能帮你点饮品、改规格、确认下单或查询已有订单。");
     expect(spoken(events)).toContain("我只能帮你点饮品");
     expect(JSON.stringify(events)).not.toMatch(/Transformer|算法|原理这类/);
   });
@@ -71,6 +73,20 @@ describe("agent host", () => {
     expect(events.some((event) => event.type === "ui" && event.block.type === "store_list")).toBe(true);
     expect(spoken(events)).toContain("选择一家门店");
     expect(events.filter((event) => event.type === "token").length).toBeGreaterThan(1);
+  });
+
+  it("asks for missing details before searching stores", async () => {
+    const executeTool = vi.fn();
+    const events = [];
+    for await (const event of runTurn("我想点奶茶", {
+      llm: stubClient(),
+      executeTool,
+    })) {
+      events.push(event);
+    }
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === "ui" && event.block.type === "clarify")).toBe(true);
+    expect(spoken(events)).toContain("信息还不全");
   });
 
   it("stops after checkout on a payment sheet without paying", async () => {

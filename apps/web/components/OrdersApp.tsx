@@ -1,25 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { listOrders, type OrderRecord } from "../lib/api";
+import { STATUS_LABEL, yuan } from "../lib/format";
 
-const STATUS_LABEL: Record<string, string> = {
-  draft_confirmed: "已确认",
-  paid: "已支付",
-  accepted: "已接单",
-  making: "制作中",
-  ready: "待取餐",
-  completed: "已完成",
-  cancelled: "已取消",
-};
-
-function yuan(cents: unknown) {
-  const value = Number(cents);
-  return `¥${(Number.isFinite(value) ? value / 100 : 0).toFixed(2)}`;
+function reorderText(order: OrderRecord) {
+  const drink = order.lines?.[0]?.name ?? "生椰拿铁";
+  const brand = order.storeName.includes("蜜雪")
+    ? "蜜雪"
+    : order.storeName.includes("喜茶")
+      ? "喜茶"
+      : order.storeName.includes("奈雪")
+        ? "奈雪"
+        : "瑞幸";
+  return `帮我点杯${brand}${drink}`;
 }
 
 export function OrdersApp() {
+  const router = useRouter();
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [missingSession, setMissingSession] = useState(false);
@@ -36,6 +36,13 @@ export function OrdersApp() {
       .catch(() => setOrders([]))
       .finally(() => setLoading(false));
   }, []);
+
+  function orderAgain(order: OrderRecord) {
+    sessionStorage.setItem("openorder.reorder", reorderText(order));
+    sessionStorage.removeItem("openorder.threadId");
+    sessionStorage.removeItem("openorder.messages");
+    router.push("/");
+  }
 
   return (
     <div className="app">
@@ -57,12 +64,18 @@ export function OrdersApp() {
           <div className="card empty">还没有订单。</div>
         ) : null}
         {orders.map((order) => (
-          <div className="card" key={order.orderId}>
+          <div className="card" key={order.orderId} data-testid="order-card">
             <div className="order-head">
               <h3>{order.storeName || "订单"}</h3>
               <span className="order-status">{STATUS_LABEL[order.status] ?? order.status}</span>
             </div>
             <p className="muted">订单 {order.orderId.slice(0, 8)}</p>
+            {order.pickupCode ? (
+              <div className="pickup-code">
+                <span className="card-kicker">取餐码</span>
+                <strong>{order.pickupCode}</strong>
+              </div>
+            ) : null}
             {order.lines?.length ? (
               <div className="line-list">
                 {order.lines.map((line, index) => (
@@ -84,6 +97,14 @@ export function OrdersApp() {
               <span>合计</span>
               <span>{yuan(order.totalCents)}</span>
             </p>
+            <button
+              className="btn btn-primary"
+              type="button"
+              data-testid="order-again"
+              onClick={() => orderAgain(order)}
+            >
+              再来一单
+            </button>
           </div>
         ))}
       </div>

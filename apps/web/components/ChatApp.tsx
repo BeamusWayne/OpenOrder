@@ -4,7 +4,15 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { configureCart, createThread, guestLogin, readSse, type AgentEvent } from "../lib/api";
 import { type DrinkSpec } from "../lib/format";
-import { ConfirmCard, ModifierCard, StoreListCard, type Store } from "./cards";
+import {
+  ClarifyCard,
+  ConfirmCard,
+  ModifierCard,
+  SoldOutCard,
+  StoreListCard,
+  type SoldOutAlternative,
+  type Store,
+} from "./cards";
 import { PaymentFlow, ProgressCard, ReceiptCard } from "./payment";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,6 +47,7 @@ export function ChatApp() {
   const [ready, setReady] = useState(false);
   const inFlight = useRef(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const persistReady = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,13 +55,52 @@ export function ChatApp() {
       try {
         const existing = sessionStorage.getItem("openorder.token");
         const session = existing ? { token: existing } : await guestLogin();
-        const thread = await createThread(session.token);
+        const reorder = sessionStorage.getItem("openorder.reorder");
+        const savedThread = sessionStorage.getItem("openorder.threadId");
+        const savedMessages = sessionStorage.getItem("openorder.messages");
+        sessionStorage.setItem("openorder.token", session.token);
         if (!cancelled) {
           setToken(session.token);
+        }
+        if (reorder) {
+          sessionStorage.removeItem("openorder.reorder");
+          sessionStorage.removeItem("openorder.messages");
+          const thread = await createThread(session.token);
+          if (cancelled) {
+            return;
+          }
           setThreadId(thread.id);
-          sessionStorage.setItem("openorder.token", session.token);
+          sessionStorage.setItem("openorder.threadId", thread.id);
           setReady(true);
           setStatus("");
+          persistReady.current = true;
+          setInput("");
+          await runTurnAfterReady(session.token, thread.id, reorder);
+          return;
+        }
+        if (savedThread && savedMessages) {
+          if (cancelled) {
+            return;
+          }
+          setThreadId(savedThread);
+          setSelectedStoreId(sessionStorage.getItem("openorder.selectedStoreId") ?? "");
+          try {
+            setMessages(JSON.parse(savedMessages) as Message[]);
+          } catch {
+            setMessages([]);
+          }
+          setReady(true);
+          setStatus("");
+          persistReady.current = true;
+          return;
+        }
+        const thread = await createThread(session.token);
+        if (!cancelled) {
+          setThreadId(thread.id);
+          sessionStorage.setItem("openorder.threadId", thread.id);
+          setReady(true);
+          setStatus("");
+          persistReady.current = true;
         }
       } catch {
         if (!cancelled) {
@@ -65,6 +113,17 @@ export function ChatApp() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!persistReady.current || !threadId) {
+      return;
+    }
+    sessionStorage.setItem("openorder.threadId", threadId);
+    sessionStorage.setItem("openorder.messages", JSON.stringify(messages.map(({ streaming, ...rest }) => rest)));
+    if (selectedStoreId) {
+      sessionStorage.setItem("openorder.selectedStoreId", selectedStoreId);
+    }
+  }, [messages, threadId, selectedStoreId]);
 
   useEffect(() => {
     const node = threadRef.current;
@@ -130,6 +189,24 @@ export function ChatApp() {
     }
   }
 
+  async function runTurnAfterReady(authToken: string, nextThreadId: string, text: string) {
+    if (inFlight.current) {
+      return;
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setStatus("正在处理…");
+    setMessages((current) => [...current, { role: "user", text }]);
+    try {
+      await readSse(`/v1/threads/${nextThreadId}/messages`, authToken, { text }, applyEvent);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+      setStatus("");
+      setMessages((current) => current.map((item) => ({ ...item, streaming: false })));
+    }
+  }
+
   async function runTurn(url: string, body: unknown, userText?: string) {
     if (!token || !threadId || inFlight.current) {
       return;
@@ -188,6 +265,24 @@ export function ChatApp() {
     await runTurn(`/v1/threads/${threadId}/confirm`, { cartId }, "确认下单");
   }
 
+  async function pickAlternative(alternative: SoldOutAlternative) {
+    if (alternative.kind === "store" && alternative.storeId) {
+      await selectStore({
+        id: alternative.storeId,
+        brand: "",
+        name: alternative.storeName ?? "这家店",
+        distanceMeters: 0,
+        etaMinutes: 15,
+      });
+      return;
+    }
+    if (alternative.skuId) {
+      const storePart = alternative.storeId ? ` storeId=${alternative.storeId}` : "";
+      const label = alternative.skuName ?? alternative.itemName ?? "另一杯";
+      await send(`换成${label} skuId=${alternative.skuId}${storePart}`, `换成${label}`);
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     const text = input.trim();
@@ -243,6 +338,8 @@ export function ChatApp() {
                 onSelectStore={selectStore}
                 onSpecChange={setSpec}
                 onConfirm={confirm}
+                onSoldOut={pickAlternative}
+                onClarify={(text) => void send(text)}
               />
             ) : null}
           </div>
@@ -280,6 +377,8 @@ function Block({
   onSelectStore,
   onSpecChange,
   onConfirm,
+  onSoldOut,
+  onClarify,
 }: {
   block: Record<string, unknown>;
   busy: boolean;
@@ -289,6 +388,8 @@ function Block({
   onSelectStore: (store: Store) => void;
   onSpecChange: (spec: DrinkSpec) => void;
   onConfirm: (cartId: string) => void;
+  onSoldOut: (alternative: SoldOutAlternative) => void;
+  onClarify: (text: string) => void;
 }) {
   if (block.type === "store_list") {
     return (
@@ -304,7 +405,21 @@ function Block({
     return <ModifierCard block={block} busy={busy} onSpecChange={onSpecChange} />;
   }
   if (block.type === "order_confirm") {
-    return <ConfirmCard block={block} busy={busy} spec={spec} onConfirm={onConfirm} />;
+    return (
+      <ConfirmCard
+        block={block}
+        busy={busy}
+        spec={spec}
+        onSpecChange={onSpecChange}
+        onConfirm={onConfirm}
+      />
+    );
+  }
+  if (block.type === "sold_out") {
+    return <SoldOutCard block={block} busy={busy} onPick={onSoldOut} />;
+  }
+  if (block.type === "clarify") {
+    return <ClarifyCard block={block} busy={busy} onPick={onClarify} />;
   }
   if (block.type === "payment_sheet") {
     return <PaymentFlow block={block} token={token} />;
@@ -319,6 +434,7 @@ function Block({
         orderId={String(block.orderId ?? "")}
         status={String(block.status ?? "")}
         steps={block.steps as Array<{ key: string; label: string; state: string }> | undefined}
+        pickupCode={typeof block.pickupCode === "string" ? block.pickupCode : undefined}
       />
     );
   }
