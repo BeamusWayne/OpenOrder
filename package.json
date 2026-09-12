@@ -17,6 +17,7 @@
     "db:migrate": "pnpm --filter @openorder/db migrate",
     "db:seed": "pnpm --filter @openorder/simulator seed",
     "test:load": "k6 run infra/k6/checkout.js",
+    "test:load:node": "pnpm --filter @openorder/api exec tsx ../../infra/k6/checkout.node.ts",
     "dev:mock": "pnpm --filter @openorder/llm-mock dev",
     "dev:api": "pnpm --filter @openorder/api dev",
     "dev:web": "pnpm --filter @openorder/web dev"

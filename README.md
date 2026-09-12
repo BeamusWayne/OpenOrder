@@ -26,10 +26,13 @@ pnpm --filter @openorder/web dev
 ```bash
 pnpm test
 DATABASE_URL=postgres://openorder:openorder@127.0.0.1:5433/openorder pnpm --filter @openorder/domain test
-k6 run infra/k6/checkout.js
+pnpm db:seed
+pnpm test:load
+# 没有 k6 时：
+pnpm test:load:node
 ```
 
-k6 会打「库存只剩 2 杯」的限量 SKU，必须恰好成功 2 单。压测前请重新 `pnpm db:seed`。
+限量 SKU 库存为 2。20 路并发结账必须恰好成功 2 单，其余售罄。压测前请重新 seed。
 
 ## 范围
 
