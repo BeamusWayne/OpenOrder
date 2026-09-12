@@ -311,7 +311,13 @@ export async function* runTurn(
             }>;
           }>;
         };
-        const item = menu.items?.[0];
+        const item = [...(menu.items ?? [])].sort((left, right) => {
+          const groupDelta = (right.groups?.length ?? 0) - (left.groups?.length ?? 0);
+          if (groupDelta !== 0) {
+            return groupDelta;
+          }
+          return (right.skus?.length ?? 0) - (left.skus?.length ?? 0);
+        })[0];
         if (menu.storeId && item?.id && ((item.groups?.length ?? 0) > 0 || (item.skus?.length ?? 0) > 0)) {
           yield {
             type: "ui",
