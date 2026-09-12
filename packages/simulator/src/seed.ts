@@ -202,9 +202,10 @@ export async function seedCatalog(db: Database) {
 
   await db.insert(skus).values([
     { id: IDS.skus.coconutLatteMedium, itemId: IDS.items.coconutLatte, name: "生椰拿铁 中杯", size: "中", basePriceCents: 1800 },
+    { id: IDS.skus.coconutLatteLarge, itemId: IDS.items.coconutLatte, name: "生椰拿铁 大杯", size: "大", basePriceCents: 2100 },
     { id: IDS.skus.americanMedium, itemId: IDS.items.american, name: "美式咖啡 中杯", size: "中", basePriceCents: 1200 },
     { id: IDS.skus.limitedTwoLeft, itemId: IDS.items.limitedCoconut, name: "限量生椰拿铁 中杯", size: "中", basePriceCents: 1900 },
-    { id: IDS.skus.soldOutLatte, itemId: IDS.items.coconutLatte, name: "生椰拿铁 大杯", size: "大", basePriceCents: 2100 },
+    { id: IDS.skus.soldOutLatte, itemId: IDS.items.coconutLatte, name: "生椰拿铁 超大杯", size: "超大", basePriceCents: 2300 },
     { id: IDS.skus.lemonWaterLarge, itemId: IDS.items.lemonWater, name: "柠檬水 大杯", size: "大", basePriceCents: 600 },
     { id: IDS.skus.iceCreamTeaMedium, itemId: IDS.items.iceCreamTea, name: "冰淇淋红茶 中杯", size: "中", basePriceCents: 800 },
     { id: IDS.skus.brownSugarLarge, itemId: IDS.items.brownSugar, name: "褐糖珍珠奶茶 大杯", size: "大", basePriceCents: 1600 },
@@ -233,6 +234,7 @@ export async function seedCatalog(db: Database) {
 
   await db.insert(inventory).values([
     { skuId: IDS.skus.coconutLatteMedium, quantity: 48 },
+    { skuId: IDS.skus.coconutLatteLarge, quantity: 24 },
     { skuId: IDS.skus.americanMedium, quantity: 60 },
     { skuId: IDS.skus.limitedTwoLeft, quantity: 2 },
     { skuId: IDS.skus.soldOutLatte, quantity: 0 },

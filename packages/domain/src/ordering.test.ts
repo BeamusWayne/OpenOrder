@@ -40,6 +40,59 @@ describe("Ordering", () => {
     expect(first.lines[0]?.modifiers).toContain("少糖");
   });
 
+  it("pays without jumping to fulfillment and then advances step by step", async () => {
+    const customer = await ordering.createGuest("pay-flow");
+    const cart = await ordering.addCartItem({
+      customerId: customer.id,
+      storeId: IDS.stores.luckinNanjing,
+      skuId: IDS.skus.coconutLatteMedium,
+      quantity: 1,
+      modifierIds: [IDS.modifiers.sugarLess, IDS.modifiers.iceNone],
+    });
+    const placed = await ordering.checkout({
+      customerId: customer.id,
+      cartId: cart.cartId,
+      idempotencyKey: "idem-pay-flow-1",
+      confirmed: true,
+    });
+    expect(placed.status).toBe("draft_confirmed");
+    expect(placed.paymentStatus).toBe("pending");
+
+    const paid = await ordering.pay(placed.orderId, customer.id, "alipay");
+    expect(paid.status).toBe("paid");
+    expect(paid.paymentStatus).toBe("succeeded");
+    expect(paid.paymentProvider).toBe("alipay");
+
+    const accepted = await ordering.advanceFulfillment(placed.orderId, customer.id);
+    expect(accepted.status).toBe("accepted");
+    const making = await ordering.advanceFulfillment(placed.orderId, customer.id);
+    expect(making.status).toBe("making");
+    const ready = await ordering.advanceFulfillment(placed.orderId, customer.id);
+    expect(ready.status).toBe("ready");
+    const again = await ordering.advanceFulfillment(placed.orderId, customer.id);
+    expect(again.status).toBe("ready");
+  });
+
+  it("updates an open cart line when the drink spec changes", async () => {
+    const customer = await ordering.createGuest("configure");
+    const cart = await ordering.addCartItem({
+      customerId: customer.id,
+      storeId: IDS.stores.luckinNanjing,
+      skuId: IDS.skus.coconutLatteMedium,
+      quantity: 1,
+      modifierIds: [IDS.modifiers.sugarLess, IDS.modifiers.iceNone],
+    });
+    const updated = await ordering.configureCart({
+      customerId: customer.id,
+      cartId: cart.cartId,
+      skuId: IDS.skus.coconutLatteLarge,
+      modifierIds: [IDS.modifiers.sugarHalf, IDS.modifiers.iceLess],
+    });
+    expect(updated.lines[0]?.name).toContain("大杯");
+    expect(updated.lines[0]?.unitPriceCents).toBe(2100);
+    expect(updated.lines[0]?.modifiers).toEqual(["半糖", "少冰"]);
+  });
+
   it("does not oversell a SKU with two cups under concurrent checkouts", async () => {
     await seedCatalog(db);
     const attempts = 20;

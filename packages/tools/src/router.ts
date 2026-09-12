@@ -49,8 +49,10 @@ export function createToolRouter(ordering: Ordering, context: ToolContext) {
           confirmed: context.confirmed,
         });
       }
-      case "pay_order":
-        return ordering.pay(PayOrderInputSchema.parse(raw).orderId, context.customerId);
+      case "pay_order": {
+        const input = PayOrderInputSchema.parse(raw);
+        return ordering.pay(input.orderId, context.customerId, input.provider ?? "mock");
+      }
       case "get_order":
         return ordering.getOrder(GetOrderInputSchema.parse(raw).orderId, context.customerId);
       default:

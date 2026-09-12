@@ -273,6 +273,56 @@ export class Ordering {
     return cart ? this.getCart(cart.id, customerId) : null;
   }
 
+  async configureCart(input: {
+    customerId: string;
+    cartId: string;
+    skuId: string;
+    modifierIds: string[];
+    quantity?: number;
+  }) {
+    const cart = await this.db.query.carts.findFirst({
+      where: and(
+        eq(carts.id, input.cartId),
+        eq(carts.customerId, input.customerId),
+        eq(carts.status, "open"),
+      ),
+    });
+    if (!cart) {
+      throw new NotFoundError("Cart");
+    }
+    const sku = await this.db.query.skus.findFirst({ where: eq(skus.id, input.skuId) });
+    if (!sku) {
+      throw new NotFoundError("SKU");
+    }
+    const quantity = input.quantity ?? 1;
+    const stock = await this.db.query.inventory.findFirst({
+      where: eq(inventory.skuId, input.skuId),
+    });
+    if (!stock || stock.quantity < quantity) {
+      throw new SoldOutError(sku.name);
+    }
+    const selected = input.modifierIds.length
+      ? await this.db.select().from(modifiers).where(inArray(modifiers.id, input.modifierIds))
+      : [];
+    const unitPriceCents =
+      sku.basePriceCents + selected.reduce((sum, modifier) => sum + modifier.priceDeltaCents, 0);
+    const lines = await this.db.select().from(cartLines).where(eq(cartLines.cartId, cart.id));
+    const last = lines.at(-1);
+    if (!last) {
+      throw new DomainError("empty_cart", "Cart is empty");
+    }
+    await this.db
+      .update(cartLines)
+      .set({
+        skuId: input.skuId,
+        quantity,
+        modifierIds: input.modifierIds,
+        unitPriceCents,
+      })
+      .where(eq(cartLines.id, last.id));
+    return this.getCart(cart.id, input.customerId);
+  }
+
   async prepareCheckout(cartId: string, customerId: string) {
     const cart = await this.getCart(cartId, customerId);
     if (cart.lines.length === 0) {
@@ -408,7 +458,7 @@ export class Ordering {
     });
   }
 
-  async pay(orderId: string, customerId: string) {
+  async pay(orderId: string, customerId: string, provider = "mock") {
     return this.db.transaction(async (tx) => {
       const order = await tx.query.orders.findFirst({
         where: and(eq(orders.id, orderId), eq(orders.customerId, customerId)),
@@ -416,12 +466,12 @@ export class Ordering {
       if (!order) {
         throw new NotFoundError("Order");
       }
-      if (order.status === "paid" || order.status === "accepted" || order.status === "making") {
+      if (order.status !== "draft_confirmed") {
         return this.serializeOrder(order.id, tx);
       }
       await tx
         .update(payments)
-        .set({ status: "succeeded", updatedAt: new Date() })
+        .set({ status: "succeeded", provider, updatedAt: new Date() })
         .where(eq(payments.orderId, order.id));
       await tx
         .update(orders)
@@ -430,15 +480,38 @@ export class Ordering {
       await tx.insert(orderEvents).values({
         orderId: order.id,
         type: "paid",
-        payload: { provider: "mock" },
+        payload: { provider },
       });
+      return this.serializeOrder(order.id, tx);
+    });
+  }
+
+  async advanceFulfillment(orderId: string, customerId: string) {
+    return this.db.transaction(async (tx) => {
+      const order = await tx.query.orders.findFirst({
+        where: and(eq(orders.id, orderId), eq(orders.customerId, customerId)),
+      });
+      if (!order) {
+        throw new NotFoundError("Order");
+      }
+      const next =
+        order.status === "paid"
+          ? "accepted"
+          : order.status === "accepted"
+            ? "making"
+            : order.status === "making"
+              ? "ready"
+              : null;
+      if (!next) {
+        return this.serializeOrder(order.id, tx);
+      }
       await tx
         .update(orders)
-        .set({ status: "accepted", updatedAt: new Date() })
+        .set({ status: next, updatedAt: new Date() })
         .where(eq(orders.id, order.id));
       await tx.insert(orderEvents).values({
         orderId: order.id,
-        type: "accepted",
+        type: next,
         payload: {},
       });
       return this.serializeOrder(order.id, tx);
@@ -477,6 +550,9 @@ export class Ordering {
       throw new NotFoundError("Order");
     }
     const store = await dbx.query.stores.findFirst({ where: eq(stores.id, order.storeId) });
+    const brand = store
+      ? await dbx.query.brands.findFirst({ where: eq(brands.id, store.brandId) })
+      : undefined;
     const lines = await dbx.select().from(orderLines).where(eq(orderLines.orderId, order.id));
     const payment = await dbx.query.payments.findFirst({
       where: eq(payments.orderId, order.id),
@@ -489,8 +565,10 @@ export class Ordering {
       orderId: order.id,
       status: order.status,
       storeName: store?.name ?? "",
+      merchantName: brand?.name ?? store?.name.split(/\s+/)[0] ?? "商家",
       totalCents: order.totalCents,
       paymentStatus: payment?.status ?? "pending",
+      paymentProvider: payment?.provider ?? "mock",
       lines: lines.map((line) => ({
         name: line.nameSnapshot,
         quantity: line.quantity,

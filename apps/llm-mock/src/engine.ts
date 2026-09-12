@@ -13,7 +13,7 @@ const OUT_OF_SCOPE =
   /transformer|注意力机制|量子|相对论|写一篇|写代码|python|golang|高考|微积分|政治|原理|什么是大模型|解释一下(?!.*糖|.*冰|.*杯)/i;
 const ORDERING =
   /点|下单|奶茶|咖啡|瑞幸|蜜雪|喜茶|奈雪|茶百道|生椰|拿铁|柠檬水|珍珠|葡萄|少糖|去冰|半糖|一杯|两杯|外卖|自取/;
-const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|少冰|正常冰|标准糖|全糖|中杯|大杯|规格|改成|好的|下单吧|买/;
+const FOLLOWUP = /确认|付款|支付|就这家|第一家|少糖|去冰|半糖|少冰|正常冰|标准糖|全糖|中杯|大杯|规格|改成|好的|下单吧|买|查看订单|订单状态|我的订单/;
 
 function lastUserText(request: ChatCompletionRequest): string {
   const users = request.messages.filter((message) => message.role === "user");
@@ -160,11 +160,26 @@ function completion(params: {
   });
 }
 
+function chunkText(text: string, size = 2): string[] {
+  const parts: string[] = [];
+  for (let index = 0; index < text.length; index += size) {
+    parts.push(text.slice(index, index + size));
+  }
+  return parts.filter((part) => part.length > 0);
+}
+
 function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionResponse {
   const names = toolNames(request);
   const user = lastUserText(request);
   const spoken = allUserText(request);
   const storeId = extractStoreId(request) ?? IDS.stores.luckinNanjing;
+  if (/查看订单|订单状态|我的订单/.test(user)) {
+    return completion({
+      model: request.model,
+      toolName: "get_order",
+      toolArguments: { orderId: extractOrderId(request) },
+    });
+  }
   if (!names.includes("search_stores")) {
     return completion({
       model: request.model,
@@ -205,7 +220,7 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       toolArguments: { cartId: extractCartId(request) },
     });
   }
-  if (/确认|下单吧|付款|支付|好的/.test(user) && !names.includes("checkout")) {
+  if (/确认|下单吧|好的/.test(user) && !names.includes("checkout")) {
     return completion({
       model: request.model,
       toolName: "checkout",
@@ -215,17 +230,10 @@ function nextOrderingTool(request: ChatCompletionRequest): ChatCompletionRespons
       },
     });
   }
-  if (names.includes("checkout") && !names.includes("pay_order")) {
+  if (names.includes("checkout")) {
     return completion({
       model: request.model,
-      toolName: "pay_order",
-      toolArguments: { orderId: extractOrderId(request) },
-    });
-  }
-  if (names.includes("pay_order")) {
-    return completion({
-      model: request.model,
-      content: "已经为你完成模拟支付，订单正在出餐。",
+      content: "订单已提交，还没有付款。请选择微信支付或支付宝。",
     });
   }
   return completion({
@@ -345,13 +353,15 @@ export function streamChat(input: unknown): ChatCompletionChunk[] {
     return chunks;
   }
   const text = choice.message.content ?? "";
-  chunks.push({
-    id: response.id,
-    object: "chat.completion.chunk",
-    created: response.created,
-    model: response.model,
-    choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
-  });
+  for (const part of chunkText(text)) {
+    chunks.push({
+      id: response.id,
+      object: "chat.completion.chunk",
+      created: response.created,
+      model: response.model,
+      choices: [{ index: 0, delta: { content: part }, finish_reason: null }],
+    });
+  }
   chunks.push({
     id: response.id,
     object: "chat.completion.chunk",
@@ -361,3 +371,5 @@ export function streamChat(input: unknown): ChatCompletionChunk[] {
   });
   return chunks;
 }
+
+export { chunkText };

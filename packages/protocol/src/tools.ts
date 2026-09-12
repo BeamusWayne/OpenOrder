@@ -35,6 +35,7 @@ export const CheckoutInputSchema = z.object({
 
 export const PayOrderInputSchema = z.object({
   orderId: z.string().uuid(),
+  provider: z.enum(["mock", "wechat", "alipay"]).optional(),
 });
 
 export const GetOrderInputSchema = z.object({

@@ -21,8 +21,10 @@ export type OrderRecord = {
   orderId: string;
   status: string;
   storeName: string;
+  merchantName?: string;
   totalCents: number;
   paymentStatus?: string;
+  paymentProvider?: string;
   lines?: OrderLine[];
 };
 
@@ -125,4 +127,49 @@ export async function listOrders(token: string) {
     throw new Error("list orders failed");
   }
   return response.json() as Promise<OrderRecord[]>;
+}
+
+export async function configureCart(
+  token: string,
+  cartId: string,
+  input: { skuId: string; modifierIds: string[]; quantity?: number },
+) {
+  const response = await fetch(`${API}/v1/carts/${cartId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error("configure cart failed");
+  }
+  return response.json();
+}
+
+export async function payOrder(token: string, orderId: string, provider: "wechat" | "alipay") {
+  const response = await fetch(`${API}/v1/orders/${orderId}/pay`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provider }),
+  });
+  if (!response.ok) {
+    throw new Error("pay failed");
+  }
+  return response.json() as Promise<OrderRecord>;
+}
+
+export async function advanceOrder(token: string, orderId: string) {
+  const response = await fetch(`${API}/v1/orders/${orderId}/advance`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new Error("advance failed");
+  }
+  return response.json() as Promise<OrderRecord>;
 }

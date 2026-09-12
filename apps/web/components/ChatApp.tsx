@@ -2,28 +2,21 @@
 
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { createThread, guestLogin, readSse, type AgentEvent } from "../lib/api";
+import { configureCart, createThread, guestLogin, readSse, type AgentEvent } from "../lib/api";
+import { type DrinkSpec } from "../lib/format";
+import { ConfirmCard, ModifierCard, StoreListCard, type Store } from "./cards";
+import { PaymentFlow, ProgressCard, ReceiptCard } from "./payment";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const STATUS_LABEL: Record<string, string> = {
-  draft_confirmed: "已确认",
-  paid: "已支付",
-  accepted: "已接单",
-  making: "制作中",
-  ready: "待取餐",
-  completed: "已完成",
-  cancelled: "已取消",
-};
-
 const TOOL_STATUS: Record<string, string> = {
-  search_stores: "正在搜索附近门店…",
-  get_menu: "正在查看菜单…",
+  search_stores: "正在找店…",
+  get_menu: "正在看菜单…",
   add_cart_item: "正在加入购物车…",
   get_cart: "正在读取购物车…",
-  prepare_checkout: "正在生成确认单…",
+  prepare_checkout: "正在算价…",
   checkout: "正在提交订单…",
-  pay_order: "正在模拟支付…",
+  pay_order: "正在确认支付结果…",
   get_order: "正在查询订单…",
 };
 
@@ -31,49 +24,8 @@ type Message = {
   role: "user" | "assistant";
   text: string;
   block?: Record<string, unknown>;
+  streaming?: boolean;
 };
-
-type Store = {
-  id: string;
-  brand: string;
-  name: string;
-  distanceMeters: number;
-  rating?: number;
-  etaMinutes: number;
-};
-
-type ConfirmLine = {
-  name: string;
-  quantity: number;
-  unitPriceCents: number;
-  modifiers?: string[];
-};
-
-type ModifierOption = {
-  id: string;
-  name: string;
-  priceDeltaCents: number;
-};
-
-type ModifierGroup = {
-  id: string;
-  name: string;
-  required: boolean;
-  options: ModifierOption[];
-};
-
-type SkuOption = {
-  id: string;
-  name: string;
-  size?: string;
-  basePriceCents?: number;
-  quantity?: number;
-};
-
-function yuan(cents: unknown) {
-  const value = Number(cents);
-  return `¥${(Number.isFinite(value) ? value / 100 : 0).toFixed(2)}`;
-}
 
 export function ChatApp() {
   const [token, setToken] = useState("");
@@ -83,6 +35,7 @@ export function ChatApp() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("正在连接…");
   const [selectedStoreId, setSelectedStoreId] = useState("");
+  const [spec, setSpec] = useState<DrinkSpec | null>(null);
   const [ready, setReady] = useState(false);
   const inFlight = useRef(false);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -104,9 +57,7 @@ export function ChatApp() {
       } catch {
         if (!cancelled) {
           setStatus("");
-          setMessages([
-            { role: "assistant", text: "连接失败，请刷新页面重试。" },
-          ]);
+          setMessages([{ role: "assistant", text: "连接失败，请刷新页面重试。" }]);
         }
       }
     })();
@@ -126,25 +77,31 @@ export function ChatApp() {
     if (event.type === "tool_start" && event.name) {
       setStatus(TOOL_STATUS[event.name] ?? "处理中…");
     }
-    if (event.type === "token" && event.text) {
+    if (event.type === "tool_end") {
       setStatus("");
+    }
+    if (event.type === "token" && event.text) {
       setMessages((current) => {
         const last = current[current.length - 1];
         const incoming = event.text ?? "";
         if (last?.role === "assistant" && !last.block) {
           if (!last.text) {
-            return [...current.slice(0, -1), { ...last, text: incoming }];
+            return [...current.slice(0, -1), { ...last, text: incoming, streaming: true }];
           }
           if (last.text === incoming || last.text.endsWith(incoming)) {
-            return current;
+            return current.map((item, index) =>
+              index === current.length - 1 ? { ...item, streaming: true } : item,
+            );
           }
-          return [...current.slice(0, -1), { ...last, text: `${last.text}${incoming}` }];
+          return [
+            ...current.slice(0, -1),
+            { ...last, text: `${last.text}${incoming}`, streaming: true },
+          ];
         }
-        return [...current, { role: "assistant", text: incoming }];
+        return [...current, { role: "assistant", text: incoming, streaming: true }];
       });
     }
     if (event.type === "ui" && event.block) {
-      setStatus("");
       if (event.block.type === "intercept") {
         const text = String(event.block.message ?? "我只能帮你点饮品、改规格、确认下单或查询已有订单。");
         setMessages((current) => {
@@ -157,7 +114,7 @@ export function ChatApp() {
         return;
       }
       setMessages((current) => [
-        ...current,
+        ...current.map((item) => ({ ...item, streaming: false })),
         { role: "assistant", text: "", block: event.block },
       ]);
     }
@@ -167,6 +124,9 @@ export function ChatApp() {
         ...current,
         { role: "assistant", text: event.message ?? "出错了，请稍后再试。" },
       ]);
+    }
+    if (event.type === "done") {
+      setMessages((current) => current.map((item) => ({ ...item, streaming: false })));
     }
   }
 
@@ -186,6 +146,7 @@ export function ChatApp() {
       inFlight.current = false;
       setBusy(false);
       setStatus("");
+      setMessages((current) => current.map((item) => ({ ...item, streaming: false })));
     }
   }
 
@@ -209,11 +170,22 @@ export function ChatApp() {
       ]);
       return;
     }
-    await runTurn(
-      `/v1/threads/${threadId}/confirm`,
-      { cartId },
-      "确认并模拟支付",
-    );
+    if (spec) {
+      try {
+        await configureCart(token, cartId, {
+          skuId: spec.skuId,
+          modifierIds: spec.modifiers.map((item) => item.id),
+          quantity: spec.quantity,
+        });
+      } catch {
+        setMessages((current) => [
+          ...current,
+          { role: "assistant", text: "规格没有保存成功，请再选一次后确认。" },
+        ]);
+        return;
+      }
+    }
+    await runTurn(`/v1/threads/${threadId}/confirm`, { cartId }, "确认下单");
   }
 
   async function onSubmit(event: FormEvent) {
@@ -250,14 +222,26 @@ export function ChatApp() {
         {messages.map((message, index) => (
           <div className={message.role === "user" ? "turn user" : "turn"} key={`${message.role}-${index}`}>
             {message.text ? (
-              <div className={message.role === "user" ? "bubble user" : "bubble"}>{message.text}</div>
+              <div
+                className={[
+                  message.role === "user" ? "bubble user" : "bubble",
+                  message.streaming ? "streaming" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {message.text}
+              </div>
             ) : null}
             {message.block ? (
               <Block
                 block={message.block}
                 busy={busy}
+                token={token}
+                spec={spec}
                 selectedStoreId={selectedStoreId}
                 onSelectStore={selectStore}
+                onSpecChange={setSpec}
                 onConfirm={confirm}
               />
             ) : null}
@@ -290,186 +274,53 @@ export function ChatApp() {
 function Block({
   block,
   busy,
+  token,
+  spec,
   selectedStoreId,
   onSelectStore,
+  onSpecChange,
   onConfirm,
 }: {
   block: Record<string, unknown>;
   busy: boolean;
+  token: string;
+  spec: DrinkSpec | null;
   selectedStoreId: string;
   onSelectStore: (store: Store) => void;
+  onSpecChange: (spec: DrinkSpec) => void;
   onConfirm: (cartId: string) => void;
 }) {
   if (block.type === "store_list") {
-    const stores = (block.stores as Store[]) ?? [];
     return (
-      <div className="card">
-        <p className="card-kicker">请选择门店</p>
-        <h3>附近门店</h3>
-        <div className="store-list">
-          {stores.map((store) => {
-            const selected = selectedStoreId === store.id;
-            return (
-              <button
-                type="button"
-                className={selected ? "store-row selected" : "store-row"}
-                key={store.id}
-                disabled={busy}
-                onClick={() => onSelectStore(store)}
-              >
-                <div>
-                  <strong>{store.name}</strong>
-                  <div className="store-meta">
-                    {store.brand} · {store.distanceMeters}m
-                    {store.rating ? ` · ${store.rating}` : ""}
-                  </div>
-                </div>
-                <span className="store-eta">{store.etaMinutes} 分钟</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <StoreListCard
+        block={block}
+        busy={busy}
+        selectedStoreId={selectedStoreId}
+        onSelectStore={onSelectStore}
+      />
     );
   }
-
   if (block.type === "modifier_picker") {
-    return <ModifierCard block={block} busy={busy} />;
+    return <ModifierCard block={block} busy={busy} onSpecChange={onSpecChange} />;
   }
-
   if (block.type === "order_confirm") {
-    const cartId = String(block.cartId ?? "");
-    const lines = (block.lines as ConfirmLine[]) ?? [];
+    return <ConfirmCard block={block} busy={busy} spec={spec} onConfirm={onConfirm} />;
+  }
+  if (block.type === "payment_sheet") {
+    return <PaymentFlow block={block} token={token} />;
+  }
+  if (block.type === "pay_receipt") {
+    return <ReceiptCard block={block} />;
+  }
+  if (block.type === "order_progress") {
     return (
-      <div className="card">
-        <p className="card-kicker">确认后将发起模拟支付</p>
-        <h3>确认订单</h3>
-        <p className="muted">{String(block.storeName ?? "")}</p>
-        <div className="line-list">
-          {lines.map((line, index) => (
-            <div className="line-row" key={`${line.name}-${index}`}>
-              <div>
-                <strong>
-                  {line.name} × {line.quantity}
-                </strong>
-                {line.modifiers?.length ? (
-                  <div className="line-meta">{line.modifiers.join(" · ")}</div>
-                ) : null}
-              </div>
-              <span className="line-price">{yuan(line.unitPriceCents * line.quantity)}</span>
-            </div>
-          ))}
-        </div>
-        <p className="total">
-          <span>合计</span>
-          <span>{yuan(block.totalCents)}</span>
-        </p>
-        <button
-          className="btn btn-primary"
-          type="button"
-          disabled={busy || !UUID_RE.test(cartId)}
-          onClick={() => onConfirm(cartId)}
-        >
-          {busy ? "提交中…" : "确认并模拟支付"}
-        </button>
-      </div>
+      <ProgressCard
+        storeName={String(block.storeName ?? "订单")}
+        orderId={String(block.orderId ?? "")}
+        status={String(block.status ?? "")}
+        steps={block.steps as Array<{ key: string; label: string; state: string }> | undefined}
+      />
     );
   }
-
-  if (block.type === "payment" || block.type === "order_status") {
-    const orderId = String(block.orderId ?? "");
-    const title = block.type === "payment" ? "模拟支付已发起" : "订单状态";
-    return (
-      <div className="card">
-        <p className="card-kicker">{title}</p>
-        <h3>{block.type === "order_status" ? String(block.storeName ?? "订单") : "支付"}</h3>
-        <p className="muted">
-          订单 {orderId.slice(0, 8)}
-          {block.type === "order_status"
-            ? ` · ${STATUS_LABEL[String(block.status)] ?? String(block.status ?? "")}`
-            : ""}
-          {block.amountCents != null ? ` · ${yuan(block.amountCents)}` : ""}
-        </p>
-      </div>
-    );
-  }
-
   return null;
-}
-
-function ModifierCard({
-  block,
-  busy,
-}: {
-  block: Record<string, unknown>;
-  busy: boolean;
-}) {
-  const groups = (block.groups as ModifierGroup[]) ?? [];
-  const skus = (block.skus as SkuOption[]) ?? [];
-  const itemName = String(block.itemName ?? "饮品");
-  const [skuId, setSkuId] = useState(() => {
-    const available = skus.find((sku) => sku.quantity !== 0);
-    return String(block.skuId ?? available?.id ?? skus[0]?.id ?? "");
-  });
-  const [selected, setSelected] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const group of groups) {
-      const preferred = group.options.find((option) => /少糖|去冰/.test(option.name));
-      const option = preferred ?? group.options[0];
-      if (option) {
-        initial[group.id] = option.id;
-      }
-    }
-    return initial;
-  });
-
-  return (
-    <div className="card">
-      <p className="card-kicker">可改规格</p>
-      <h3>{itemName}</h3>
-      {skus.length > 0 ? (
-        <div className="choice-group">
-          <h4>杯型</h4>
-          <div className="choice-row">
-            {skus.map((sku) => {
-              const soldOut = sku.quantity === 0;
-              return (
-                <button
-                  type="button"
-                  key={sku.id}
-                  className={skuId === sku.id ? "choice selected" : "choice"}
-                  disabled={busy || soldOut}
-                  onClick={() => setSkuId(sku.id)}
-                >
-                  {sku.name}
-                  {soldOut ? " · 售罄" : ""}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-      {groups.map((group) => (
-        <div className="choice-group" key={group.id}>
-          <h4>{group.name}</h4>
-          <div className="choice-row">
-            {group.options.map((option) => (
-              <button
-                type="button"
-                key={option.id}
-                className={selected[group.id] === option.id ? "choice selected" : "choice"}
-                disabled={busy}
-                onClick={() => setSelected((current) => ({ ...current, [group.id]: option.id }))}
-              >
-                {option.name}
-                {option.priceDeltaCents
-                  ? ` ${option.priceDeltaCents > 0 ? "+" : ""}${yuan(option.priceDeltaCents)}`
-                  : ""}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }

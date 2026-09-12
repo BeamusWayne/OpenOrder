@@ -16,6 +16,9 @@ mockApp.post("/v1/chat/completions", async (context) => {
   return streamSSE(context, async (stream) => {
     for (const chunk of chunks) {
       await stream.writeSSE({ data: JSON.stringify(chunk) });
+      if (chunk.choices[0]?.delta?.content) {
+        await new Promise((resolve) => setTimeout(resolve, 18));
+      }
     }
     await stream.writeSSE({ data: "[DONE]" });
   });

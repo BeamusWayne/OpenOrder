@@ -69,6 +69,23 @@ authed.post("/v1/carts", async (context) => {
   );
 });
 
+authed.patch("/v1/carts/:id", async (context) => {
+  const body = await context.req.json<{
+    skuId: string;
+    modifierIds?: string[];
+    quantity?: number;
+  }>();
+  return context.json(
+    await ordering.configureCart({
+      customerId: context.get("customerId"),
+      cartId: context.req.param("id"),
+      skuId: body.skuId,
+      modifierIds: body.modifierIds ?? [],
+      quantity: body.quantity ?? 1,
+    }),
+  );
+});
+
 authed.get("/v1/stores", async (context) => {
   const query = context.req.query("q") ?? "饮品";
   return context.json(await ordering.searchStores({ query }));
@@ -87,8 +104,19 @@ authed.get("/v1/orders/:id", async (context) => {
 });
 
 authed.post("/v1/orders/:id/pay", async (context) => {
-  const order = await ordering.pay(context.req.param("id"), context.get("customerId"));
+  const body = await context.req.json<{ provider?: string }>().catch(() => ({ provider: "mock" }));
+  const provider =
+    body.provider === "wechat" || body.provider === "alipay" || body.provider === "mock"
+      ? body.provider
+      : "mock";
+  const order = await ordering.pay(context.req.param("id"), context.get("customerId"), provider);
   return context.json(order);
+});
+
+authed.post("/v1/orders/:id/advance", async (context) => {
+  return context.json(
+    await ordering.advanceFulfillment(context.req.param("id"), context.get("customerId")),
+  );
 });
 
 authed.post("/v1/checkout", async (context) => {
@@ -155,16 +183,12 @@ authed.post("/v1/threads/:id/messages", async (context) => {
 
   metrics.chatAccepted += 1;
   return streamSSE(context, async (stream) => {
-    for await (const event of runTurn(body.text, { llm, executeTool, history })) {
-      await persistEvent(threadId, event);
-      if (event.type === "intent" && event.intent === "out_of_scope") {
-        metrics.chatIntercepted += 1;
-      }
-      await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-    }
-    await stream.writeSSE({
-      event: "done",
-      data: JSON.stringify({ type: "done", threadId }),
+    await writeAgentStream(stream, threadId, runTurn(body.text, { llm, executeTool, history }), {
+      onEvent: (event) => {
+        if (event.type === "intent" && event.intent === "out_of_scope") {
+          metrics.chatIntercepted += 1;
+        }
+      },
     });
   });
 });
@@ -178,7 +202,7 @@ authed.post("/v1/threads/:id/confirm", async (context) => {
   }
   const body = await context.req.json<{ cartId?: string }>().catch(() => ({ cartId: "" }));
   const cartId = typeof body.cartId === "string" ? body.cartId.trim() : "";
-  const text = cartId ? `确认下单并支付 cartId=${cartId}` : "确认下单并支付";
+  const text = cartId ? `确认下单 cartId=${cartId}` : "确认下单";
   await db.insert(messages).values({ threadId, role: "user", content: text });
   const historyRows = await db.select().from(messages).where(eq(messages.threadId, threadId));
   const history = historyRows
@@ -195,23 +219,44 @@ authed.post("/v1/threads/:id/confirm", async (context) => {
     confirmed: true,
   });
   return streamSSE(context, async (stream) => {
-    for await (const event of runTurn(text, { llm, executeTool, history })) {
-      await persistEvent(threadId, event);
-      await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-    }
-    await stream.writeSSE({
-      event: "done",
-      data: JSON.stringify({ type: "done", threadId }),
-    });
+    await writeAgentStream(stream, threadId, runTurn(text, { llm, executeTool, history }));
   });
 });
 
 app.route("/", authed);
 
-async function persistEvent(threadId: string, event: AgentEvent) {
-  if (event.type === "token") {
-    await db.insert(messages).values({ threadId, role: "assistant", content: event.text });
+async function writeAgentStream(
+  stream: { writeSSE: (message: { event?: string; data: string }) => Promise<void> },
+  threadId: string,
+  events: AsyncIterable<AgentEvent>,
+  options?: { onEvent?: (event: AgentEvent) => void },
+) {
+  let tokenBuffer = "";
+  const flushTokens = async () => {
+    if (!tokenBuffer) {
+      return;
+    }
+    await db.insert(messages).values({ threadId, role: "assistant", content: tokenBuffer });
+    tokenBuffer = "";
+  };
+  for await (const event of events) {
+    options?.onEvent?.(event);
+    if (event.type === "token") {
+      tokenBuffer += event.text;
+    } else {
+      await flushTokens();
+      await persistEvent(threadId, event);
+    }
+    await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
   }
+  await flushTokens();
+  await stream.writeSSE({
+    event: "done",
+    data: JSON.stringify({ type: "done", threadId }),
+  });
+}
+
+async function persistEvent(threadId: string, event: AgentEvent) {
   if (event.type === "tool_end") {
     await db.insert(messages).values({
       threadId,
