@@ -1,0 +1,113 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f1ea;
+  --ink: #1d1a16;
+  --muted: #6d645b;
+  --card: #fffdf9;
+  --line: #e6dccf;
+  --accent: #b4532a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+header h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+header p {
+  margin: 0 0 24px;
+  color: var(--muted);
+}
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bubble,
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #2b211b;
+  color: #fffdf9;
+  border-color: #2b211b;
+  max-width: 80%;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.card button,
+form button {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.store {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+form {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 12px;
+  background: var(--bg);
+}
+
+form textarea {
+  flex: 1;
+  min-height: 56px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--card);
+}
+
+.orders a {
+  color: var(--accent);
+}
